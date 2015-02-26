@@ -1,0 +1,109 @@
+#!/bin/bash
+#
+# chroot environment builder
+# Version 20150225.1
+# References:
+#  https://help.ubuntu.com/community/LiveCDCustomizationFromScratch
+#  https://help.ubuntu.com/community/LiveCDCustomization
+#
+# Run as Root
+
+# Configurable Items
+VOLUME="trusty"
+CHROOTLOCATION=.
+CHROOTDIR=chroot
+MIRROR=http://mirrors.mit.edu/ubuntu
+
+BACKUPFILE1=chroot.s1.$VOLUME.tgz
+BACKUPFILE2=chroot.s2.$VOLUME.tgz
+BACKUPDIR=.
+
+# Create any missing directories
+if [ ! -e $CHROOTLOCATION ]; then
+    mkdir -p $CHROOTLOCATION
+fi
+
+# Have we already created this and have a backup file, if so use it.
+if [ ! -e $CHROOTLOCATION/$CHROOTDIR ]; then
+    if [ -e $BACKUPDIR/chroot.s2.$VOLUME.tgz ]; then
+        echo "Extracting saved - $VOLUME - chroot environment to $CHROOTLOCATION"
+        tar -zxpf $BACKUPDIR/chroot.s2.$VOLUME.tgz -C $CHROOTLOCATION
+    fi
+fi
+if [ ! -e $CHROOTLOCATION/$CHROOTDIR ]; then
+    if [ -e $BACKUPDIR/chroot.s1.$VOLUME.tgz ]; then
+        echo "Extracting saved - $VOLUME - chroot environment to $CHROOTLOCATION"
+        tar -zxpf $BACKUPDIR/chroot.s1.$VOLUME.tgz -C $CHROOTLOCATION
+    fi
+fi
+if [ ! -e $CHROOTLOCATION/$CHROOTDIR ]; then
+    if [ -e $BACKUPDIR/chroot.s0.$VOLUME.tgz ]; then
+        echo "Extracting saved - $VOLUME - chroot environment to $CHROOTLOCATION"
+        tar -zxpf $BACKUPDIR/chroot.s0.$VOLUME.tgz -C $CHROOTLOCATION
+    fi
+fi
+
+# If we have yet to build the initial CLEAN chroot environment
+if [ ! -e $CHROOTLOCATION/$CHROOTDIR ]; then
+    mkdir -p $CHROOTLOCATION/$CHROOTDIR
+    cd $CHROOTLOCATION
+    apt-get -qqq install debootstrap
+    debootstrap --arch=amd64 $VOLUME $CHROOTDIR $MIRROR
+    mv chroot/var/cache/apt/archives/*.deb /var/cache/apt/archives/
+    echo "Saving chroot environment ... "
+    tar -czpf $BACKUPDIR/chroot.s0.$VOLUME.tgz $CHROOTDIR
+fi
+
+# Copy configuration files (needed for basic networking)
+if [ ! -e $CHROOTLOCATION/$CHROOTDIR/.s0 ]; then
+    echo "Copying configuration files..."
+    cd $CHROOTLOCATION
+    cp /etc/hosts $CHROOTDIR/etc/hosts
+    cp /etc/resolv.conf $CHROOTDIR/etc/resolv.conf
+    grep -v cdrom /etc/apt/sources.list > $CHROOTDIR/etc/apt/sources.list
+    touch $CHROOTLOCATION/$CHROOTDIR/.s0
+fi 
+
+# Prepare Environment
+cd $CHROOTLOCATION
+cp /etc/resolv.conf $CHROOTDIR/etc/resolv.conf
+
+# Initial environment creation
+if [ ! -e $CHROOTLOCATION/$CHROOTDIR/.s1 ]; then
+    echo "Setting up chroot for first use..."
+    cd $CHROOTLOCATION
+    cp /var/cache/apt/archives/*.deb $CHROOTLOCATION/$CHROOTDIR/var/cache/apt/archives
+    cp /etc/resolv.conf $CHROOTDIR/etc/resolv.conf
+
+    mount --bind /dev $CHROOTLOCATION/$CHROOTDIR/dev
+    chroot $CHROOTLOCATION/$CHROOTDIR /bin/cp /sbin/initctl /sbin/initctl.bak
+    chroot $CHROOTLOCATION/$CHROOTDIR /bin/mount none -t proc /proc
+    chroot $CHROOTLOCATION/$CHROOTDIR /bin/mount none -t sysfs /sys
+    chroot $CHROOTLOCATION/$CHROOTDIR /bin/mount none -t devpts /dev/pts
+    chroot $CHROOTLOCATION/$CHROOTDIR /usr/bin/env HOME=/root LC_ALL=C /usr/bin/apt-get update
+    chroot $CHROOTLOCATION/$CHROOTDIR /usr/bin/env HOME=/root LC_ALL=C /usr/bin/apt-get install --yes dbus
+    chroot $CHROOTLOCATION/$CHROOTDIR /bin/dbus-uuidgen > /var/lib/dbus/machine-id
+    chroot $CHROOTLOCATION/$CHROOTDIR /usr/bin/dpkg-divert --local --rename --add /sbin/initctl
+    chroot $CHROOTLOCATION/$CHROOTDIR /bin/ln -s /bin/true /sbin/initctl
+    chroot $CHROOTLOCATION/$CHROOTDIR /usr/bin/env HOME=/root LC_ALL=C /usr/bin/apt-get --yes upgrade
+    chroot $CHROOTLOCATION/$CHROOTDIR /etc/init.d/udev stop
+    #chroot $CHROOTLOCATION/$CHROOTDIR /usr/bin/env HOME=/root LC_ALL=C /usr/bin/apt-get remove --yes udev
+    chroot $CHROOTLOCATION/$CHROOTDIR /bin/rm -rf /tmp/* ~/.bash_history
+    chroot $CHROOTLOCATION/$CHROOTDIR /bin/rm /etc/resolv.conf
+    chroot $CHROOTLOCATION/$CHROOTDIR /bin/rm /var/lib/dbus/machine-id
+    chroot $CHROOTLOCATION/$CHROOTDIR /bin/rm /sbin/initctl
+    chroot $CHROOTLOCATION/$CHROOTDIR /usr/bin/dpkg-divert --rename --remove /sbin/initctl
+    chroot $CHROOTLOCATION/$CHROOTDIR /bin/umount /proc/sys/fs/binfmt_misc
+    chroot $CHROOTLOCATION/$CHROOTDIR /bin/umount /proc
+    chroot $CHROOTLOCATION/$CHROOTDIR /bin/umount /sys
+    chroot $CHROOTLOCATION/$CHROOTDIR /bin/umount /dev/pts
+    chroot $CHROOTLOCATION/$CHROOTDIR /bin/umount -lf /proc
+    touch $CHROOTLOCATION/$CHROOTDIR/.s1
+    umount $CHROOTLOCATION/$CHROOTDIR/dev
+    umount -f $CHROOTLOCATION/$CHROOTDIR/dev
+    umount -lf $CHROOTLOCATION/$CHROOTDIR/dev
+    mv $CHROOTLOCATION/$CHROOTDIR/var/cache/apt/archives/*.deb /var/cache/apt/archives/
+
+    echo "Saving chroot environment ..."
+    tar -czpf $BACKUPDIR/chroot.s1.$VOLUME.tgz $CHROOTDIR
+fi
